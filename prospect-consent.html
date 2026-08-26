@@ -49,7 +49,9 @@
   }
   .chk.on .box{ background:#111; }
   .chk.invalid .box{ box-shadow:0 0 0 2px #C0392B; }
-  .chk.disabled{ cursor:not-allowed; opacity:0.35; }
+  .chk.disabled{ cursor:not-allowed; }
+  .chk.disabled .box{ background:#bbb; opacity:0.6; }
+  .chk.disabled.on .box{ background:#888; }
 
   .sigbox{
     position:absolute; cursor:pointer; background:transparent;
@@ -184,7 +186,7 @@
     <button class="tool-btn" id="clearSigBtn">서명 지우기</button>
     <div class="right-group">
       <button class="save-btn outline" id="saveBtn">PDF로 저장</button>
-      <button class="save-btn" id="exportBtn">PDF로 내보내기</button>
+      <button class="save-btn" id="exportBtn">제출하기</button>
     </div>
   </div>
 </div>
@@ -295,32 +297,73 @@ window.addEventListener('load', syncFontSizes);
 syncFontSizes();
 
 /* ---------------- 상태 ---------------- */
-const state = { docType:"신규", reqConsent:"동의", optConsent:"동의", channels:new Set(["DM","SMS"]) };
+const state = { docType:"신규", reqConsent:"동의", optConsent:"동의", channels:new Set(["SMS","TM"]) };
 
 function handleGroupChkClick(el){
+  if(el.classList.contains('disabled')) return; // 잠긴 옵션은 클릭 무시
   const group = el.dataset.group, val = el.dataset.val;
   document.querySelectorAll(`.chk[data-group="${group}"]`).forEach(b=>{ b.classList.remove('on'); b.classList.remove('invalid'); });
   el.classList.add('on');
   state[group] = val;
-  if(group === 'reqConsent') updateChannelGating();
+  if(group === 'reqConsent') updateRequiredGating();
+  if(group === 'optConsent') updateOptionalGating();
 }
 
-function updateChannelGating(){
+/* 필수정보(reqConsent)가 미동의로 바뀌면:
+   - 마케팅 수신동의(선택정보/optConsent)도 자동으로 미동의로 전환
+   - optConsent 버튼 자체와 그 아래 모든 채널 선택지를 잠금(클릭 불가) */
+function updateRequiredGating(){
   const locked = state.reqConsent === '미동의';
+
+  document.getElementById('chk-opt-y').classList.toggle('disabled', locked);
+  document.getElementById('chk-opt-n').classList.toggle('disabled', locked);
+
   if(locked){
-    // 연락처 수집·이용에 동의하지 않았다면 마케팅 채널은 '미동의'로 고정
+    state.optConsent = '미동의';
+    document.getElementById('chk-opt-y').classList.remove('on');
+    document.getElementById('chk-opt-n').classList.add('on');
+
     state.channels = new Set(['미동의']);
     document.querySelectorAll('.chk[data-channel]').forEach(b=>{
       b.classList.toggle('on', b.dataset.channel === '미동의');
-      b.classList.toggle('disabled', b.dataset.channel !== '미동의');
+      b.classList.add('disabled');
     });
   } else {
     document.querySelectorAll('.chk[data-channel]').forEach(b=> b.classList.remove('disabled'));
+    updateOptionalGating();
   }
 }
 
+/* 선택정보(optConsent)가 미동의면: 이메일, 팩스 채널만 자동으로 회색 처리 + 선택 해제 */
+function updateOptionalGating(){
+  if(state.reqConsent === '미동의') return; // 필수정보 잠금이 우선 적용된 상태면 그대로 둔다
+  const locked = state.optConsent === '미동의';
+  const dm = document.getElementById('chk-ch-dm');
+  const email = document.getElementById('chk-ch-email');
+  const fax = document.getElementById('chk-ch-fax');
+
+  [dm, email, fax].forEach(b=>{
+    b.classList.toggle('disabled', locked);
+    if(locked) b.classList.remove('on');
+  });
+
+  if(locked){
+    state.channels.delete('DM');
+    state.channels.delete('E-mail');
+    state.channels.delete('FAX');
+    if(state.channels.size === 0){
+      state.channels.add('미동의');
+      document.getElementById('chk-ch-na').classList.add('on');
+    }
+  }
+}
+
+function updateChannelGating(){
+  updateRequiredGating();
+}
+
 function handleChannelChkClick(el){
-  if(state.reqConsent === '미동의' && el.dataset.channel !== '미동의') return; // 미동의 상태에서는 다른 채널 선택 불가
+  if(el.classList.contains('disabled')) return; // 잠긴 채널은 클릭 무시
   const val = el.dataset.channel;
   if(val === '미동의'){
     state.channels = new Set(['미동의']);
@@ -350,8 +393,8 @@ document.addEventListener('click', function(e){
 document.getElementById('chk-doc-new').classList.add('on');
 document.getElementById('chk-req-y').classList.add('on');
 document.getElementById('chk-opt-y').classList.add('on');
-document.getElementById('chk-ch-dm').classList.add('on');
 document.getElementById('chk-ch-sms').classList.add('on');
+document.getElementById('chk-ch-tm').classList.add('on');
 
 (function(){
   const d = new Date();
@@ -775,62 +818,30 @@ function blobToBase64(blob){
   });
 }
 
-/* "PDF로 내보내기" 버튼용: PDF를 만들어 공유 시트(카카오톡/이메일/드라이브 등)로 내보냄.
-   공유가 안 되는 환경(데스크톱 브라우저 등)에서는 새 탭에서 PDF를 열어
-   브라우저 자체의 인쇄/저장/공유 기능을 쓸 수 있게 폴백한다. */
-async function exportPdf(){
+/* "제출하기" 버튼용: PDF를 만들어 자동으로 pluspb@hanwha.com에 전송한다.
+   전송에 실패하면 예외를 던지며, 클릭 핸들러 쪽에서 "PDF로 저장 후 개별 전달" 안내를 보여준다. */
+async function submitConsent(){
+  if(!APPS_SCRIPT_URL || APPS_SCRIPT_URL === "YOUR_APPS_SCRIPT_WEB_APP_URL_HERE"){
+    throw new Error('전송 설정이 되어 있지 않습니다.');
+  }
+
   const { bytes, filename } = await buildPdfBytesAndName();
   const blob = new Blob([bytes], { type: 'application/pdf' });
+  const name = document.getElementById('name').value.trim() || '고객';
+  const phone = document.getElementById('mobile').value.trim() || document.getElementById('phone').value.trim() || '';
+  const base64 = await blobToBase64(blob);
 
-  /* APPS_SCRIPT_URL이 설정되어 있으면 공유 창 없이 pluspb@hanwha.com으로 자동 전송 */
-  if(APPS_SCRIPT_URL && APPS_SCRIPT_URL !== "YOUR_APPS_SCRIPT_WEB_APP_URL_HERE"){
-    try{
-      const name = document.getElementById('name').value.trim() || '고객';
-      const phone = document.getElementById('mobile').value.trim() || document.getElementById('phone').value.trim() || '';
-      const base64 = await blobToBase64(blob);
+  const fd = new FormData();
+  fd.append('name', name);
+  fd.append('phone', phone);
+  fd.append('filename', filename);
+  fd.append('pdfBase64', base64);
 
-      const fd = new FormData();
-      fd.append('name', name);
-      fd.append('phone', phone);
-      fd.append('filename', filename);
-      fd.append('pdfBase64', base64);
-
-      /* Apps Script 웹앱은 CORS 프리플라이트를 지원하지 않아 mode:'no-cors'로 보냄.
-         이 모드에서는 응답 내용을 읽을 수 없어 성공/실패를 코드로는 확인할 수 없지만,
-         전송 자체(fetch)가 오류 없이 끝나면 정상적으로 서버에 도달한 것으로 처리한다. */
-      await fetch(APPS_SCRIPT_URL, { method: 'POST', mode: 'no-cors', body: fd });
-      return 'auto-sent';
-    }catch(sendErr){
-      console.error('자동 전송 중 오류:', sendErr);
-      // 실패 시 아래 공유/새 탭 폴백으로 진행
-    }
-  }
-
-  let file = null;
-  try{ file = new File([blob], filename, { type: 'application/pdf' }); }catch(e){ file = null; }
-
-  if(file && navigator.canShare && navigator.canShare({ files: [file] })){
-    try{
-      await navigator.share({
-        files: [file],
-        title: '가망고객 개인정보 수집·이용 동의서',
-        text: filename
-      });
-      return 'shared';
-    }catch(shareErr){
-      if(shareErr && shareErr.name === 'AbortError'){
-        // 사용자가 공유창을 취소함 - 오류 아님
-        return 'cancelled';
-      }
-      // 그 외 공유 실패 시 아래 새 탭 열기로 폴백
-    }
-  }
-
-  // Web Share API 미지원 또는 실패: 새 탭에서 PDF를 열어 브라우저 자체 공유/저장 기능 사용
-  const url = URL.createObjectURL(blob);
-  window.open(url, '_blank');
-  setTimeout(()=>URL.revokeObjectURL(url), 60000);
-  return 'opened';
+  /* Apps Script 웹앱은 CORS 프리플라이트를 지원하지 않아 mode:'no-cors'로 보냄.
+     이 모드에서는 응답 내용을 읽을 수 없어 서버 안쪽 처리 결과까지는 확인이 안 되지만,
+     네트워크 전송 자체가 오류 없이 끝나면 정상적으로 서버에 도달한 것으로 처리한다.
+     (오프라인이거나 URL이 잘못된 경우 등 네트워크 단계 오류는 여기서 catch되어 실패로 처리된다) */
+  await fetch(APPS_SCRIPT_URL, { method: 'POST', mode: 'no-cors', body: fd });
 }
 
 function showOverlayLoading(){
@@ -861,10 +872,10 @@ function resetForm(){
   document.getElementById('chk-doc-new').classList.add('on');
   document.getElementById('chk-req-y').classList.add('on');
   document.getElementById('chk-opt-y').classList.add('on');
-  document.getElementById('chk-ch-dm').classList.add('on');
   document.getElementById('chk-ch-sms').classList.add('on');
+  document.getElementById('chk-ch-tm').classList.add('on');
   state.docType='신규'; state.reqConsent='동의'; state.optConsent='동의';
-  state.channels = new Set(['DM', 'SMS']);
+  state.channels = new Set(['SMS', 'TM']);
   nameFinal.clear();
   signFinal.clear();
   nameHint.style.display='flex';
@@ -898,25 +909,19 @@ document.getElementById('exportBtn').addEventListener('click', async ()=>{
     return;
   }
   showOverlayLoading();
-  let result;
   try{
-    result = await exportPdf();
+    await submitConsent();
+    document.getElementById('overlay').classList.remove('show');
+    showMessage('제출 완료', '제출이 완료되었습니다. 감사합니다.');
   }catch(err){
     document.getElementById('overlay').classList.remove('show');
-    showMessage('PDF 생성 오류', 'PDF 생성 중 오류가 발생했습니다:\n\n' + (err && err.message ? err.message : err) + '\n\n다시 시도해 주세요.');
+    showMessage(
+      '제출 실패',
+      '제출 처리 중 문제가 발생했습니다.\n\n' +
+      '"PDF로 저장" 버튼으로 PDF를 저장하신 후, 담당자에게 개별적으로 전달해 주세요.'
+    );
     console.error(err);
-    return;
   }
-  document.getElementById('overlay').classList.remove('show');
-
-  if(result === 'auto-sent'){
-    showMessage('전송 완료', 'PDF가 pluspb@hanwha.com으로 자동 전송되었습니다.');
-  } else if(result === 'shared'){
-    showMessage('내보내기 완료', 'PDF를 선택하신 앱으로 내보냈습니다.');
-  } else if(result === 'opened'){
-    showMessage('PDF 열림', '새 탭에서 PDF가 열렸습니다. 그 화면의 공유/저장/인쇄 기능을 이용해 주세요.');
-  }
-  // result === 'cancelled'인 경우는 사용자가 공유를 취소한 것이므로 별도 안내 없이 종료
 });
 }
 
