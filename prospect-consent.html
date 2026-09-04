@@ -228,6 +228,36 @@
 <script>
 function initConsentForm(){
 
+/* ---------------- 세미나 등록 화면에서 넘어온 값 자동 입력 ----------------
+   주소의 # 뒤에 담겨 오므로 서버 기록·리퍼러에는 남지 않는다.
+   읽어들인 직후 주소에서 지워 고객 단말 방문기록에도 남기지 않는다.
+   빈 칸일 때만 채우므로 고객이 고쳐 쓴 값을 덮어쓰지 않는다. ------------- */
+try{
+  var _hs = location.hash ? location.hash.slice(1) : '';
+  if(_hs){
+    var _pm = {};
+    _hs.split('&').forEach(function(kv){
+      var i = kv.indexOf('=');
+      if(i > 0){
+        try{ _pm[kv.slice(0,i)] = decodeURIComponent(kv.slice(i+1).replace(/\+/g,' ')); }catch(_){}
+      }
+    });
+    /* 넘어온 항목 → 이 문서의 칸 (작성일은 이미 자동 입력되므로 건드리지 않음) */
+    [['name','name'], ['mobile','mobile']].forEach(function(m){
+      var el = document.getElementById(m[1]), v = _pm[m[0]];
+      if(el && v && !el.value){
+        el.value = v;
+        el.dispatchEvent(new Event('input',  {bubbles:true}));
+        el.dispatchEvent(new Event('change', {bubbles:true}));
+      }
+    });
+    if(window.history && history.replaceState){
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+  }
+}catch(_e){ /* 자동 입력이 실패해도 직접 타이핑은 그대로 되어야 한다 */ }
+
+
 const topbarMsg = document.getElementById('topbarMsg');
 if(topbarMsg) topbarMsg.textContent = '✓ 정상 작동 중 — 빈칸은 타이핑으로 입력하고, 하단 서명란만 직접 펜으로 서명해 주세요.';
 
