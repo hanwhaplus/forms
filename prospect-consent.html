@@ -329,7 +329,7 @@ window.addEventListener('load', syncFontSizes);
 syncFontSizes();
 
 /* ---------------- 상태 ---------------- */
-const state = { docType:"신규", reqConsent:"동의", optConsent:"동의", channels:new Set(["SMS","TM"]) };
+const state = { docType:"신규", reqConsent:null, optConsent:null, channels:new Set() };
 
 function handleGroupChkClick(el){
   if(el.classList.contains('disabled')) return; // 잠긴 옵션은 클릭 무시
@@ -337,7 +337,12 @@ function handleGroupChkClick(el){
   document.querySelectorAll(`.chk[data-group="${group}"]`).forEach(b=>{ b.classList.remove('on'); b.classList.remove('invalid'); });
   el.classList.add('on');
   state[group] = val;
-  if(group === 'reqConsent') updateRequiredGating();
+  if(group === 'reqConsent'){
+    updateRequiredGating();
+    if(val === '미동의'){
+      showMessage('안내', '개인정보 수집·이용에 관한 동의를 거부하실 수 있습니다. 다만, 동의하지 않으실 경우 "상품·서비스 안내 및 마케팅 활용" 목적으로 가망고객 관리가 불가능합니다.');
+    }
+  }
   if(group === 'optConsent') updateOptionalGating();
 }
 
@@ -362,7 +367,16 @@ function updateRequiredGating(){
     });
   } else {
     document.querySelectorAll('.chk[data-channel]').forEach(b=> b.classList.remove('disabled'));
-    updateOptionalGating();
+
+    // 필수정보 동의 시 선택정보 동의 및 마케팅 채널도 함께 동의 처리
+    state.optConsent = '동의';
+    document.getElementById('chk-opt-y').classList.add('on');
+    document.getElementById('chk-opt-n').classList.remove('on');
+
+    state.channels = new Set(['SMS','TM']);
+    document.querySelectorAll('.chk[data-channel]').forEach(b=>{
+      b.classList.toggle('on', b.dataset.channel === 'SMS' || b.dataset.channel === 'TM');
+    });
   }
 }
 
@@ -423,10 +437,6 @@ document.addEventListener('click', function(e){
 });
 
 document.getElementById('chk-doc-new').classList.add('on');
-document.getElementById('chk-req-y').classList.add('on');
-document.getElementById('chk-opt-y').classList.add('on');
-document.getElementById('chk-ch-sms').classList.add('on');
-document.getElementById('chk-ch-tm').classList.add('on');
 
 (function(){
   const d = new Date();
@@ -924,12 +934,8 @@ function resetForm(){
   document.querySelectorAll('.txt').forEach(i=>i.value='');
   document.querySelectorAll('.chk').forEach(b=>{ b.classList.remove('on'); b.classList.remove('disabled'); });
   document.getElementById('chk-doc-new').classList.add('on');
-  document.getElementById('chk-req-y').classList.add('on');
-  document.getElementById('chk-opt-y').classList.add('on');
-  document.getElementById('chk-ch-sms').classList.add('on');
-  document.getElementById('chk-ch-tm').classList.add('on');
-  state.docType='신규'; state.reqConsent='동의'; state.optConsent='동의';
-  state.channels = new Set(['SMS', 'TM']);
+  state.docType='신규'; state.reqConsent=null; state.optConsent=null;
+  state.channels = new Set();
   nameFinal.clear();
   signFinal.clear();
   nameHint.style.display='flex';
