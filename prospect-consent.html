@@ -233,9 +233,11 @@ function initConsentForm(){
    읽어들인 직후 주소에서 지워 고객 단말 방문기록에도 남기지 않는다.
    빈 칸일 때만 채우므로 고객이 고쳐 쓴 값을 덮어쓰지 않는다. ------------- */
 try{
+  var SEMINAR = {};   /* 세미나 등록 화면에서 넘어온 값 보관 */
+  var REG_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwRtmBmRCqLHbT2Vj7R2hpK_cK6YOUpi_53_tZSvgMbmqQgTlFjngJvvX186pgfTovTvQ/exec';
   var _hs = location.hash ? location.hash.slice(1) : '';
   if(_hs){
-    var _pm = {};
+    var _pm = SEMINAR;
     _hs.split('&').forEach(function(kv){
       var i = kv.indexOf('=');
       if(i > 0){
@@ -850,6 +852,28 @@ function blobToBase64(blob){
 
 /* "제출하기" 버튼용: PDF를 만들어 자동으로 pluspb@hanwha.com에 전송한다.
    전송에 실패하면 예외를 던지며, 클릭 핸들러 쪽에서 "PDF로 저장 후 개별 전달" 안내를 보여준다. */
+/* 동의서 제출이 끝나면 참가 등록까지 여기서 마무리한다.
+   고객이 등록 화면으로 돌아가지 않아도 되도록. */
+async function registerSeminar(){
+  if(!SEMINAR.name || !SEMINAR.mobile) return 'skip';   /* 동의서만 단독으로 연 경우 */
+
+  var fd = new FormData();
+  fd.append('name',    SEMINAR.name);
+  fd.append('phone',   SEMINAR.mobile);
+  fd.append('year',    SEMINAR.year    || '');
+  fd.append('org',     SEMINAR.org     || '');
+  fd.append('meal',    SEMINAR.meal    || '');
+  fd.append('consent', SEMINAR.consent || '');
+  fd.append('event',   SEMINAR.event   || '');
+
+  var res = await fetch(REG_ENDPOINT, { method:'POST', body: fd });
+  var txt = await res.text();
+  var j = null;
+  try{ j = JSON.parse(txt); }catch(_){}
+  if(j && j.ok) return 'ok';
+  throw new Error(j && j.error ? j.error : '등록 저장 실패');
+}
+
 async function submitConsent(){
   if(!APPS_SCRIPT_URL || APPS_SCRIPT_URL === "YOUR_APPS_SCRIPT_WEB_APP_URL_HERE"){
     throw new Error('전송 설정이 되어 있지 않습니다.');
@@ -941,8 +965,27 @@ document.getElementById('exportBtn').addEventListener('click', async ()=>{
   showOverlayLoading();
   try{
     await submitConsent();
+
+    /* 동의서가 접수됐으면 참가 등록까지 이어서 처리한다.
+       등록만 실패한 경우에도 동의서는 이미 접수된 상태이므로 그 사실을 함께 알린다. */
+    var reg = 'skip';
+    try{ reg = await registerSeminar(); }
+    catch(regErr){ reg = 'fail'; console.error(regErr); }
+
     document.getElementById('overlay').classList.remove('show');
-    showMessage('제출 완료', '제출이 완료되었습니다. 감사합니다.');
+
+    if(reg === 'ok'){
+      showMessage('접수 완료',
+        '동의서 제출과 참가 등록이 모두 완료되었습니다.\n\n' +
+        '상세 안내를 위해 PLUS PB가 별도로 연락드릴 예정입니다.\n' +
+        '등록 화면으로 돌아가실 필요는 없습니다.');
+    }else if(reg === 'fail'){
+      showMessage('동의서만 접수됨',
+        '동의서는 정상 접수되었으나, 참가 등록 저장에 실패했습니다.\n\n' +
+        '등록 화면으로 돌아가 "등록 완료"를 눌러주세요.');
+    }else{
+      showMessage('제출 완료', '제출이 완료되었습니다. 감사합니다.');
+    }
   }catch(err){
     document.getElementById('overlay').classList.remove('show');
     showMessage(
